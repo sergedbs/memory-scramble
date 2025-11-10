@@ -51,6 +51,14 @@ async def main():
     server = WebServer(board, port)
     await server.start()
 
+    # Keep the server running until interrupted
+    try:
+        # Wait forever (until Ctrl+C)
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        server.stop()
+
 
 class WebServer:
     """

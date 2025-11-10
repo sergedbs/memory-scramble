@@ -15,8 +15,7 @@ async def look(board: Board, player_id: str) -> str:
     @returns the state of the board from the perspective of player_id, in the format
              described in the ps4 handout
     """
-    raise NotImplementedError("look function not implemented")
-    # implement with glue code only, at most three lines
+    return board.look(player_id)
 
 
 async def flip(board: Board, player_id: str, row: int, column: int) -> str:
@@ -37,8 +36,8 @@ async def flip(board: Board, player_id: str, row: int, column: int) -> str:
     @throws an error (in a rejected promise) if the flip operation fails as described
             in the ps4 handout.
     """
-    raise NotImplementedError("flip function not implemented")
-    # implement with glue code only, at most three lines
+    await board.flip(player_id, row, column)
+    return board.look(player_id)
 
 
 async def map_board(
@@ -67,8 +66,8 @@ async def map_board(
     @returns the state of the board after the replacement from the perspective of player_id,
              in the format described in the ps4 handout
     """
-    raise NotImplementedError("map function not implemented")
-    # implement with glue code only, at most three lines
+    await board.map(f)
+    return board.look(player_id)
 
 
 async def watch(board: Board, player_id: str) -> str:
@@ -82,5 +81,5 @@ async def watch(board: Board, player_id: str) -> str:
     @returns the updated state of the board from the perspective of player_id, in the
              format described in the ps4 handout
     """
-    raise NotImplementedError("watch function not implemented")
-    # implement with glue code only, at most three lines
+    await board.watch()
+    return board.look(player_id)

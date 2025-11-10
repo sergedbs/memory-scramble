@@ -186,29 +186,325 @@ class PlayerState:
 
 class Board:
     """
-    TODO specification
-    Mutable and concurrency safe.
+    Represents a Memory Scramble game board.
+
+    A board is a grid of cards that players can flip to find matching pairs.
+    The board tracks card states, player control, and enforces game rules.
+
+    Mutable and concurrency safe (when used with proper locking).
     """
 
-    # TODO fields
+    def __init__(self, rows: int, cols: int, cards: list[list[Card]]):
+        """
+        Create a new board with the given dimensions and cards.
 
-    # Abstraction function:
-    #   TODO
-    # Representation invariant:
-    #   TODO
-    # Safety from rep exposure:
-    #   TODO
+        @param rows: number of rows (positive integer)
+        @param cols: number of columns (positive integer)
+        @param cards: 2D list of Card objects (rows x cols)
+        @raises ValueError: if dimensions are invalid or cards don't match dimensions
+        """
+        if rows <= 0 or cols <= 0:
+            raise ValueError("Board dimensions must be positive")
+        if len(cards) != rows:
+            raise ValueError(f"Expected {rows} rows, got {len(cards)}")
+        for i, row in enumerate(cards):
+            if len(row) != cols:
+                raise ValueError(f"Row {i} has {len(row)} cards, expected {cols}")
 
-    # TODO constructor
+        self._rows = rows
+        self._cols = cols
+        self._grid: list[list[Card]] = cards
+        self._players: dict[str, PlayerState] = {}
 
-    # TODO checkRep
+        # Concurrency primitives (to be fully used in Phase 5)
+        self._lock = asyncio.Lock()
 
-    # TODO other methods
+        self._check_rep()
+
+    def size(self) -> Tuple[int, int]:
+        """
+        @returns (rows, cols) dimensions of the board
+        """
+        return (self._rows, self._cols)
+
+    def _get_card(self, row: int, col: int) -> Card:
+        """
+        Internal: get card at position.
+
+        @param row: row index (0-based)
+        @param col: column index (0-based)
+        @returns: Card at that position
+        @raises IndexError: if position is out of bounds
+        """
+        return self._grid[row][col]
+
+    def _get_or_create_player(self, player_id: str) -> PlayerState:
+        """
+        Internal: get or create player state.
+
+        @param player_id: player identifier
+        @returns: PlayerState for this player
+        """
+        if player_id not in self._players:
+            self._players[player_id] = PlayerState(player_id)
+        return self._players[player_id]
+
+    def _cleanup_before_first_flip(self, player: PlayerState) -> None:
+        """
+        Internal: apply turn boundary cleanup before a player's next first flip.
+
+        Rule 3: Before a player flips their first card again:
+        - If they previously matched (3-A): remove the matched pair, relinquish control
+        - If they previously mismatched (3-B): flip down any eligible cards
+          (still on board, face up, uncontrolled)
+
+        @param player: PlayerState to clean up
+        """
+        # Rule 3-A: Remove matched pair
+        if player.matched_pair is not None:
+            pos1, pos2 = player.matched_pair
+            card1 = self._get_card(*pos1)
+            card2 = self._get_card(*pos2)
+
+            # Remove both cards
+            card1.remove()
+            card2.remove()
+
+            # Clear player state
+            player.clear_state()
+
+        # Rule 3-B: Flip down relinquished cards
+        elif player.first_card is not None or player.second_card is not None:
+            # Check cards the player previously controlled but relinquished
+            positions_to_check = []
+            if player.first_card is not None:
+                positions_to_check.append(player.first_card)
+            if player.second_card is not None:
+                positions_to_check.append(player.second_card)
+
+            for pos in positions_to_check:
+                card = self._get_card(*pos)
+                # Only flip down if: still on board, face up, and uncontrolled
+                if card.on_board and card.face_up and card.controller is None:
+                    card.flip_down()
+
+            # Clear player state
+            player.clear_state()
+
+    def _flip_first_immediate(self, player_id: str, row: int, col: int) -> None:
+        """
+        Internal: execute immediate (non-blocking) first card flip.
+
+        Rule 1 (synchronous version - blocking handled in Phase 5):
+        1-A: If no card (removed): raise FlipError
+        1-B: If face down: flip up, grant control
+        1-C: If face up and uncontrolled: grant control
+
+        @param player_id: player making the flip
+        @param row: row position
+        @param col: column position
+        @raises FlipError: if the flip fails according to game rules
+        """
+        self._validate_position(row, col)
+        player = self._get_or_create_player(player_id)
+
+        # Apply turn boundary cleanup
+        self._cleanup_before_first_flip(player)
+
+        card = self._get_card(row, col)
+
+        # Rule 1-A: No card at position (removed)
+        if not card.on_board:
+            raise FlipError("Cannot flip a removed card")
+
+        # Rule 1-B: Card is face down
+        if not card.face_up:
+            card.flip_up()
+            card.set_controller(player_id)
+            player.first_card = (row, col)
+            return
+
+        # Rule 1-C: Card is face up and uncontrolled
+        if card.controller is None:
+            card.set_controller(player_id)
+            player.first_card = (row, col)
+            return
+
+        # Rule 1-D: Card is controlled by another player
+        # For Phase 4, we raise an error. Phase 5 will add blocking/waiting.
+        raise FlipError(
+            f"Card at ({row}, {col}) is controlled by another player: {card.controller}"
+        )
+
+    def _flip_second_immediate(self, player_id: str, row: int, col: int) -> None:
+        """
+        Internal: execute immediate second card flip.
+
+        Rule 2 (when player already controls one card):
+        2-A: If no card (removed): fail, relinquish first card
+        2-B: If face up and controlled: fail, relinquish first card
+        2-C/D/E: If face down or (face up and uncontrolled):
+            - Flip up if needed
+            - If match: keep control of both
+            - If no match: relinquish both
+
+        @param player_id: player making the flip
+        @param row: row position
+        @param col: column position
+        @raises FlipError: if the flip fails according to game rules
+        """
+        self._validate_position(row, col)
+        player = self._get_or_create_player(player_id)
+
+        # Player must control exactly one card
+        if player.first_card is None:
+            raise ValueError("Player must control first card before flipping second")
+        if player.second_card is not None:
+            raise ValueError("Player already has second card")
+
+        first_pos = player.first_card
+        first_card = self._get_card(*first_pos)
+        second_card = self._get_card(row, col)
+
+        # Rule 2-A: No card at position (removed)
+        if not second_card.on_board:
+            # Relinquish first card (remains face up, loses control)
+            first_card.set_controller(None)
+            player.first_card = None  # Mark for turn boundary cleanup
+            raise FlipError("Cannot flip a removed card")
+
+        # Rule 2-B: Card is face up and controlled (by anyone, including self)
+        if second_card.face_up and second_card.controller is not None:
+            # Relinquish first card
+            first_card.set_controller(None)
+            player.first_card = None  # Mark for turn boundary cleanup
+            raise FlipError(f"Card at ({row}, {col}) is already controlled")
+
+        # Rules 2-C/D/E: Card is available (face down or face up & uncontrolled)
+
+        # Rule 2-C: Flip up if face down
+        if not second_card.face_up:
+            second_card.flip_up()
+
+        # Grant control of second card
+        second_card.set_controller(player_id)
+        player.second_card = (row, col)
+
+        # Rule 2-D: Check for match
+        if first_card.value == second_card.value:
+            # Match! Keep control of both, mark for removal at turn boundary
+            player.mark_match(first_pos, (row, col))
+        else:
+            # Rule 2-E: No match - relinquish both (they remain face up)
+            first_card.set_controller(None)
+            second_card.set_controller(None)
+            # Leave positions in player state for turn boundary cleanup
+
+    def _validate_position(self, row: int, col: int) -> None:
+        """
+        Internal: raise if position is out of bounds.
+
+        @param row: row index
+        @param col: column index
+        @raises ValueError: if position is invalid
+        """
+        if row < 0 or row >= self._rows:
+            raise ValueError(f"Row {row} out of bounds [0, {self._rows})")
+        if col < 0 or col >= self._cols:
+            raise ValueError(f"Column {col} out of bounds [0, {self._cols})")
+
+    def _check_rep(self) -> None:
+        """Verify representation invariants."""
+        # Dimensions must be positive
+        assert self._rows > 0, "Rows must be positive"
+        assert self._cols > 0, "Columns must be positive"
+
+        # Grid must match dimensions
+        assert len(self._grid) == self._rows, "Grid rows mismatch"
+        for i, row in enumerate(self._grid):
+            assert len(row) == self._cols, f"Grid row {i} columns mismatch"
+
+        # All removed cards must come in matching pairs
+        removed_values: dict[str, int] = {}
+        for row in self._grid:
+            for card in row:
+                if not card.on_board:
+                    removed_values[card.value] = removed_values.get(card.value, 0) + 1
+
+        for value, count in removed_values.items():
+            assert count % 2 == 0, f"Removed cards for '{value}' not in pairs: {count}"
+
+    def __str__(self) -> str:
+        """String representation showing board dimensions."""
+        return f"Board({self._rows}x{self._cols})"
+
+    def __repr__(self) -> str:
+        """Detailed representation for debugging."""
+        return f"Board({self._rows}x{self._cols}, {len(self._players)} players)"
+
+    def look(self, player_id: str) -> str:
+        """
+        Generate board state from a player's perspective.
+
+        Returns a textual representation showing:
+        - "none" for removed cards
+        - "down" for face-down cards
+        - "up CARD" for face-up cards controlled by others or uncontrolled
+        - "my CARD" for face-up cards controlled by this player
+
+        Format:
+        ROWxCOL
+        SPOT
+        SPOT
+        ...
+
+        Where each SPOT is one of the above representations,
+        in row-major order (top-left to bottom-right).
+
+        @param player_id: ID of the player viewing the board
+        @returns: textual board state
+        """
+        # Validate player_id format
+        if not player_id:
+            raise ValueError("Player ID must be non-empty")
+        if not all(c.isalnum() or c == "_" for c in player_id):
+            raise ValueError(
+                "Player ID must contain only alphanumeric or underscore characters"
+            )
+
+        # Build the board state string
+        lines = [f"{self._rows}x{self._cols}"]
+
+        for r in range(self._rows):
+            for c in range(self._cols):
+                card = self._get_card(r, c)
+
+                if not card.on_board:
+                    # Card has been removed
+                    lines.append("none")
+                elif not card.face_up:
+                    # Card is face down
+                    lines.append("down")
+                elif card.controller == player_id:
+                    # Card is face up and controlled by this player
+                    lines.append(f"my {card.value}")
+                else:
+                    # Card is face up but controlled by another player or no one
+                    lines.append(f"up {card.value}")
+
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     async def parse_from_file(filename: str) -> "Board":
         """
         Make a new board by parsing a file.
+
+        File format:
+        ROWxCOL
+        CARD1
+        CARD2
+        ...
+        (empty line at end)
 
         PS4 instructions: the specification of this method may not be changed.
 
@@ -216,4 +512,75 @@ class Board:
         @returns a new board with the size and cards from the file
         @throws Error if the file cannot be read or is not a valid game board
         """
-        return Board()  # TODO: implement this
+        import re
+        import aiofiles
+
+        try:
+            # Read file asynchronously
+            async with aiofiles.open(filename, "r", encoding="utf-8") as f:
+                content = await f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Board file not found: {filename}")
+        except Exception as e:
+            raise ValueError(f"Error reading board file: {e}")
+
+        # Split into lines (handle both \n and \r\n)
+        lines = content.split("\n")
+        # Remove \r if present (for cross-platform compatibility)
+        lines = [line.rstrip("\r") for line in lines]
+
+        # Remove any trailing empty lines beyond the first one
+        # (file should end with exactly one empty line after the last card)
+        while len(lines) > 2 and lines[-1] == "" and lines[-2] == "":
+            lines.pop()
+
+        if len(lines) < 2:
+            raise ValueError("Board file must have at least header and one card")
+
+        # Parse header: "ROWxCOL"
+        header = lines[0]
+        match = re.match(r"^(\d+)x(\d+)$", header)
+        if not match:
+            raise ValueError(f"Invalid header format: '{header}', expected 'ROWxCOL'")
+
+        rows = int(match.group(1))
+        cols = int(match.group(2))
+
+        if rows <= 0 or cols <= 0:
+            raise ValueError(f"Board dimensions must be positive: {rows}x{cols}")
+
+        expected_cards = rows * cols
+
+        # Lines should be: header + cards + empty line at end
+        if len(lines) != expected_cards + 2:
+            raise ValueError(
+                f"Expected {expected_cards + 2} lines (header + {expected_cards} cards + empty line), "
+                f"got {len(lines)}"
+            )
+
+        # Last line should be empty
+        if lines[-1] != "":
+            raise ValueError("Board file must end with an empty line")
+
+        # Parse cards (lines 1 through rows*cols)
+        card_lines = lines[1 : expected_cards + 1]
+
+        # Build 2D grid of cards
+        cards: list[list[Card]] = []
+        for r in range(rows):
+            row_cards: list[Card] = []
+            for c in range(cols):
+                card_text = card_lines[r * cols + c]
+
+                # Validate card text
+                if not card_text:
+                    raise ValueError(f"Card at position ({r}, {c}) is empty")
+                if any(ch.isspace() for ch in card_text):
+                    raise ValueError(
+                        f"Card at position ({r}, {c}) contains whitespace: '{card_text}'"
+                    )
+
+                row_cards.append(Card(card_text))
+            cards.append(row_cards)
+
+        return Board(rows, cols, cards)

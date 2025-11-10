@@ -216,8 +216,13 @@ class Board:
         self._grid: list[list[Card]] = cards
         self._players: dict[str, PlayerState] = {}
 
-        # Concurrency primitives (to be fully used in Phase 5)
+        # Concurrency primitives for Phase 5
         self._lock = asyncio.Lock()
+        # Per-spot conditions for blocking on controlled cards (Rule 1-D)
+        self._spot_conditions: dict[Tuple[int, int], asyncio.Condition] = {}
+        # Version counter and condition for watch() support (Phase 6)
+        self._version = 0
+        self._watch_condition = asyncio.Condition(self._lock)
 
         self._check_rep()
 
@@ -249,7 +254,7 @@ class Board:
             self._players[player_id] = PlayerState(player_id)
         return self._players[player_id]
 
-    def _cleanup_before_first_flip(self, player: PlayerState) -> None:
+    def _cleanup_before_first_flip(self, player: PlayerState) -> list[Tuple[int, int]]:
         """
         Internal: apply turn boundary cleanup before a player's next first flip.
 
@@ -258,8 +263,14 @@ class Board:
         - If they previously mismatched (3-B): flip down any eligible cards
           (still on board, face up, uncontrolled)
 
+        NOTE: This is called from within async locked context, so notifications
+        are handled by the calling async method.
+
         @param player: PlayerState to clean up
+        @returns: list of positions that were modified (for notification)
         """
+        positions_changed: list[Tuple[int, int]] = []
+
         # Rule 3-A: Remove matched pair
         if player.matched_pair is not None:
             pos1, pos2 = player.matched_pair
@@ -269,6 +280,7 @@ class Board:
             # Remove both cards
             card1.remove()
             card2.remove()
+            positions_changed.extend([pos1, pos2])
 
             # Clear player state
             player.clear_state()
@@ -287,11 +299,16 @@ class Board:
                 # Only flip down if: still on board, face up, and uncontrolled
                 if card.on_board and card.face_up and card.controller is None:
                     card.flip_down()
+                    positions_changed.append(pos)
 
             # Clear player state
             player.clear_state()
 
-    def _flip_first_immediate(self, player_id: str, row: int, col: int) -> None:
+        return positions_changed
+
+    def _flip_first_immediate(
+        self, player_id: str, row: int, col: int
+    ) -> list[Tuple[int, int]]:
         """
         Internal: execute immediate (non-blocking) first card flip.
 
@@ -303,13 +320,14 @@ class Board:
         @param player_id: player making the flip
         @param row: row position
         @param col: column position
+        @returns: list of positions that were modified by cleanup (for notification)
         @raises FlipError: if the flip fails according to game rules
         """
         self._validate_position(row, col)
         player = self._get_or_create_player(player_id)
 
         # Apply turn boundary cleanup
-        self._cleanup_before_first_flip(player)
+        positions_changed = self._cleanup_before_first_flip(player)
 
         card = self._get_card(row, col)
 
@@ -322,13 +340,13 @@ class Board:
             card.flip_up()
             card.set_controller(player_id)
             player.first_card = (row, col)
-            return
+            return positions_changed
 
         # Rule 1-C: Card is face up and uncontrolled
         if card.controller is None:
             card.set_controller(player_id)
             player.first_card = (row, col)
-            return
+            return positions_changed
 
         # Rule 1-D: Card is controlled by another player
         # For Phase 4, we raise an error. Phase 5 will add blocking/waiting.
@@ -399,6 +417,146 @@ class Board:
             first_card.set_controller(None)
             second_card.set_controller(None)
             # Leave positions in player state for turn boundary cleanup
+
+    async def flip_first(self, player_id: str, row: int, col: int) -> None:
+        """
+        Async first card flip with blocking/waiting support.
+
+        Rule 1-D: If card is controlled by another player, waits (non-busy) until available.
+        Once available, attempts to flip. May fail if card was removed while waiting.
+
+        @param player_id: player making the flip
+        @param row: row position
+        @param col: column position
+        @raises FlipError: if the flip fails according to game rules
+        """
+        self._validate_position(row, col)
+
+        async with self._lock:
+            card = self._get_card(row, col)
+
+            # Check if card is controlled by another player (Rule 1-D)
+            while card.on_board and card.face_up and card.controller is not None:
+                # Need to wait for card to become available
+                # Get or create per-spot condition
+                spot_key = (row, col)
+                if spot_key not in self._spot_conditions:
+                    self._spot_conditions[spot_key] = asyncio.Condition(self._lock)
+
+                condition = self._spot_conditions[spot_key]
+                await condition.wait()
+
+                # Re-check card state after waking up
+                card = self._get_card(row, col)
+
+            # Now card is available (or removed) - attempt immediate flip
+            positions_changed = self._flip_first_immediate(player_id, row, col)
+
+            # Notify waiters on positions affected by cleanup
+            for pos in positions_changed:
+                self._release_spot(*pos)
+
+            # Notify watchers of board change
+            self._notify_watchers()
+
+    async def flip_second(self, player_id: str, row: int, col: int) -> None:
+        """
+        Async second card flip.
+
+        No blocking for second flip (Rule 2-B: controlled cards fail immediately).
+        When control is relinquished, notifies waiting players on those spots.
+
+        @param player_id: player making the flip
+        @param row: row position
+        @param col: column position
+        @raises FlipError: if the flip fails according to game rules
+        """
+        async with self._lock:
+            player = self._get_or_create_player(player_id)
+            first_pos = player.first_card
+
+            try:
+                self._flip_second_immediate(player_id, row, col)
+            except FlipError:
+                # If second flip failed, first card was relinquished
+                # Notify anyone waiting on the first card's spot
+                if first_pos is not None:
+                    self._release_spot(*first_pos)
+                raise
+
+            # Check if cards were relinquished (mismatch)
+            # If neither card is controlled, notify waiters on both spots
+            if first_pos is not None:
+                first_card = self._get_card(*first_pos)
+                if first_card.controller is None:
+                    self._release_spot(*first_pos)
+
+            second_card = self._get_card(row, col)
+            if second_card.controller is None:
+                self._release_spot(row, col)
+
+            # Notify watchers of board change
+            self._notify_watchers()
+
+    async def flip(self, player_id: str, row: int, col: int) -> None:
+        """
+        Unified flip operation - routes to first or second flip based on player state.
+
+        Automatically determines if this is a first or second flip attempt based on
+        whether the player currently controls a card. Important: this check happens
+        BEFORE cleanup, so a player with matched_pair set will route to flip_first
+        (which triggers cleanup and then flips the new card).
+
+        @param player_id: player making the flip
+        @param row: row position
+        @param col: column position
+        @raises FlipError: if the flip fails according to game rules
+        """
+        # We need to check player state to route, but flip_first will handle cleanup
+        # Acquire lock briefly just to check state
+        async with self._lock:
+            player = self._get_or_create_player(player_id)
+            # Check if player has cards that are still active (not cleaned up)
+            # A player routes to flip_first if:
+            # - They have no cards, OR
+            # - They have a matched_pair (cleanup will clear it), OR
+            # - They have relinquished cards (cleanup will clear them)
+            # A player routes to flip_second only if they have first_card and no second_card
+            # and no matched_pair (actively controlling one card)
+            has_active_first = (
+                player.first_card is not None
+                and player.second_card is None
+                and player.matched_pair is None
+            )
+
+        # Release lock before calling flip methods (they acquire it themselves)
+        if has_active_first:
+            await self.flip_second(player_id, row, col)
+        else:
+            await self.flip_first(player_id, row, col)
+
+    def _notify_watchers(self) -> None:
+        """
+        Internal: notify all watchers that the board has changed.
+        Increments version counter and wakes up all waiting watch() calls.
+        """
+        self._version += 1
+        self._watch_condition.notify_all()
+
+    def _release_spot(self, row: int, col: int) -> None:
+        """
+        Internal: release control of a spot and notify ALL waiting players.
+
+        This wakes up ALL waiters, not just one, because when a card is removed
+        all waiters need to wake up and realize the card is gone.
+
+        @param row: row position
+        @param col: column position
+        """
+        spot_key = (row, col)
+        if spot_key in self._spot_conditions:
+            # Wake up ALL waiters (they will re-check card state)
+            self._spot_conditions[spot_key].notify_all()
 
     def _validate_position(self, row: int, col: int) -> None:
         """

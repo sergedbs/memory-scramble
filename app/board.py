@@ -192,6 +192,44 @@ class Board:
     The board tracks card states, player control, and enforces game rules.
 
     Mutable and concurrency safe (when used with proper locking).
+
+    Abstraction Function:
+        AF(rows, cols, grid, players, version) =
+            A rows×cols grid of cards where grid[r][c] represents the card
+            at position (r, c) in row-major order (top-left is (0,0)).
+            Each card has a value, visibility state (face up/down), presence
+            (on board or removed), and optional controller (player ID).
+
+            'players' maps player IDs to their transient game state: which
+            cards they control and whether they have a matched pair pending
+            removal at the next turn boundary.
+
+            'version' is a monotonically increasing counter used to notify
+            watchers when any observable board state changes.
+
+    Representation Invariant:
+        - rows > 0 and cols > 0
+        - len(grid) == rows and all(len(row) == cols for row in grid)
+        - All cards in grid are valid Card objects
+        - For any card: if not on_board => not face_up and controller is None
+        - For any card: if not face_up => controller is None
+        - For any card: if controller is not None => face_up and on_board
+        - No two distinct cards have the same non-None controller
+        - Removed cards come in matching pairs (same value, even count)
+        - All player IDs in players dict match their PlayerState.player_id
+        - For each player's controlled positions: the cards at those positions
+          actually have that player as controller
+        - version >= 0
+
+    Safety from Representation Exposure:
+        - All mutable fields are private (prefixed with _)
+        - grid is never returned directly; only accessed through private methods
+        - players dict is never exposed; only accessed through _get_or_create_player
+        - look() returns immutable string representation (no references to internal state)
+        - Card objects in grid are mutable but never returned to clients
+        - PlayerState objects are mutable but never returned to clients
+        - Concurrency primitives (locks, conditions) are private and never exposed
+        - Public methods only return primitive types (str, Tuple[int, int]) or await
     """
 
     def __init__(self, rows: int, cols: int, cards: list[list[Card]]):

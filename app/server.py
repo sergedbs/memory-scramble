@@ -57,7 +57,7 @@ async def main():
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         print("\nShutting down server...")
-        server.stop()
+        await server.stop()
 
 
 class WebServer:
@@ -95,8 +95,11 @@ class WebServer:
             player_id = request.match_info["playerId"]
             assert player_id
 
-            board_state = await look(self.board, player_id)
-            return web.Response(text=board_state, status=200)
+            try:
+                board_state = await look(self.board, player_id)
+                return web.Response(text=board_state, status=200)
+            except ValueError as err:
+                return web.Response(text=f"invalid player ID: {err}", status=400)
 
         self.app.router.add_get("/look/{playerId}", handle_look)
 
@@ -112,15 +115,26 @@ class WebServer:
             assert player_id
             assert location
 
-            parts = location.split(",")
-            row = int(parts[0])
-            column = int(parts[1])
-            assert row is not None and not isinstance(row, bool)
-            assert column is not None and not isinstance(column, bool)
-
             try:
+                parts = location.split(",")
+                if len(parts) != 2:
+                    return web.Response(
+                        text="invalid location format: expected 'row,col'", status=400
+                    )
+
+                try:
+                    row = int(parts[0])
+                    column = int(parts[1])
+                except ValueError:
+                    return web.Response(
+                        text="invalid location: row and column must be integers",
+                        status=400,
+                    )
+
                 board_state = await flip(self.board, player_id, row, column)
                 return web.Response(text=board_state, status=200)
+            except ValueError as err:
+                return web.Response(text=f"invalid input: {err}", status=400)
             except Exception as err:
                 return web.Response(text=f"cannot flip this card: {err}", status=409)
 
@@ -142,11 +156,17 @@ class WebServer:
             assert from_card
             assert to_card
 
-            async def replace_func(card: str) -> str:
-                return to_card if card == from_card else card
+            try:
 
-            board_state = await map_board(self.board, player_id, replace_func)
-            return web.Response(text=board_state, status=200)
+                async def replace_func(card: str) -> str:
+                    return to_card if card == from_card else card
+
+                board_state = await map_board(self.board, player_id, replace_func)
+                return web.Response(text=board_state, status=200)
+            except ValueError as err:
+                return web.Response(text=f"invalid input: {err}", status=400)
+            except Exception as err:
+                return web.Response(text=f"cannot replace cards: {err}", status=409)
 
         self.app.router.add_get(
             "/replace/{playerId}/{fromCard}/{toCard}", handle_replace
@@ -164,8 +184,11 @@ class WebServer:
             player_id = request.match_info["playerId"]
             assert player_id
 
-            board_state = await watch(self.board, player_id)
-            return web.Response(text=board_state, status=200)
+            try:
+                board_state = await watch(self.board, player_id)
+                return web.Response(text=board_state, status=200)
+            except ValueError as err:
+                return web.Response(text=f"invalid player ID: {err}", status=400)
 
         self.app.router.add_get("/watch/{playerId}", handle_watch)
 
@@ -198,12 +221,12 @@ class WebServer:
             raise RuntimeError("server is not listening at a port")
         return self.site._server.sockets[0].getsockname()[1]
 
-    def stop(self):
+    async def stop(self):
         """
         Stop this server. Once stopped, this server cannot be restarted.
         """
         if self.runner:
-            asyncio.create_task(self.runner.cleanup())
+            await self.runner.cleanup()
         print("server stopped")
 
 

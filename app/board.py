@@ -652,6 +652,90 @@ class Board:
 
         return "\n".join(lines) + "\n"
 
+    async def map(self, transformer) -> None:
+        """
+        Transform all card values using an async transformer function.
+
+        Applies the transformer to every card's value on the board. The transformation
+        maintains matching consistency: cards that matched before map() will still match
+        after (they're transformed together). Does not change face-up/down state or control.
+
+        Strategy:
+        1. Group cards by current value (matching cards grouped together)
+        2. Transform each group's value concurrently
+        3. Commit each group atomically under lock
+        4. Notify watchers after each group commit
+
+        @param transformer: async function (old_value: str) -> new_value: str
+        """
+        # Phase 1: Collect all cards and group by value (outside lock)
+        async with self._lock:
+            # Build groups: value -> list of (row, col) positions
+            value_groups: dict[str, list[Tuple[int, int]]] = {}
+            for r in range(self._rows):
+                for c in range(self._cols):
+                    card = self._get_card(r, c)
+                    if card.on_board:  # Only transform cards still on the board
+                        if card.value not in value_groups:
+                            value_groups[card.value] = []
+                        value_groups[card.value].append((r, c))
+
+        # Phase 2: Transform each unique value concurrently (outside lock)
+        # Only transform if there are cards on the board
+        if not value_groups:
+            return  # No cards to transform
+
+        transform_tasks = {}
+        for old_value in value_groups.keys():
+            transform_tasks[old_value] = asyncio.create_task(transformer(old_value))
+
+        # Wait for all transformations to complete
+        await asyncio.gather(*transform_tasks.values())
+
+        # Phase 3: Commit each group atomically (under lock)
+        for old_value, positions in value_groups.items():
+            new_value = await transform_tasks[old_value]
+
+            # Validate new value (same rules as Card constructor)
+            if not new_value or not new_value.strip():
+                raise ValueError("Transformed card value must be non-empty")
+            if any(c.isspace() for c in new_value):
+                raise ValueError("Transformed card value must not contain whitespace")
+
+            # Atomically update all cards with this value
+            async with self._lock:
+                for row, col in positions:
+                    card = self._get_card(row, col)
+                    if card.on_board:  # Double-check card wasn't removed
+                        card.value = new_value
+
+                # Notify watchers after each group commit
+                self._notify_watchers()
+
+    async def watch(self) -> str:
+        """
+        Wait for the next board change, then return current board state.
+
+        Blocks until any change occurs (card flipped, removed, or value changed),
+        then returns a textual snapshot of the board from a neutral perspective.
+
+        This is a long-polling operation that allows clients to be notified of
+        board changes without repeatedly polling.
+
+        @returns: textual board state (same format as look() but no player context)
+        """
+        async with self._lock:
+            # Capture current version
+            version_before = self._version
+
+            # Wait until version changes
+            while self._version == version_before:
+                await self._watch_condition.wait()
+
+            # Return current state (neutral observer - no "my" cards)
+            # We'll use a dummy player ID that doesn't exist
+            return self.look("_watcher_")
+
     @staticmethod
     async def parse_from_file(filename: str) -> "Board":
         """

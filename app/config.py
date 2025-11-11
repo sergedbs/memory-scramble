@@ -6,7 +6,7 @@ from typing import Tuple
 class Config:
     DEFAULT_PORT = 8080
     DEFAULT_BOARD = "boards/perfect.txt"
-    DEFAULT_HOST = "localhost"  # Use 0.0.0.0 in Docker for external access
+    DEFAULT_HOST = "localhost"
 
     @staticmethod
     def get_config() -> Tuple[int, str, str]:

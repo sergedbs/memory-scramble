@@ -47,15 +47,13 @@ async def main():
     server = WebServer(board, port, host)
     await server.start()
 
-    # Keep the server running until interrupted
-    shutdown_event = asyncio.Event()
     try:
-        await shutdown_event.wait()
+        await asyncio.Event().wait()
     except (KeyboardInterrupt, asyncio.CancelledError):
-        pass  # Normal shutdown
-    finally:
         print("\nShutting down server...")
         await server.stop()
+    finally:
+        print("Server stopped.")
 
 
 class WebServer:
@@ -226,9 +224,9 @@ class WebServer:
         """
         Stop this server. Once stopped, this server cannot be restarted.
         """
+        print("The server is stopping...")
         if self.runner:
             await self.runner.cleanup()
-        print("Server stopped")
 
 
 if __name__ == "__main__":

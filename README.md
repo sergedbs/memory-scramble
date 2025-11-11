@@ -1,6 +1,6 @@
 # Memory Scramble
 
-A multiplayer, concurrent implementation of the Memory/Concentration card matching game. Built with Python asyncio and aiohttp, this project demonstrates advanced concurrency patterns, shared mutable state management, and real-time event notification systems.
+A multiplayer, concurrent implementation of the Memory/Concentration card matching game. Built with Python asyncio and aiohttp, this project demonstrates advanced concurrency patterns, shared mutable state management, and real-time event notification systems. Based on [MIT 6.102 -  Problem Set 4: Memory Scramble](https://web.mit.edu/6.102/www/sp25/psets/ps4/)
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT%206.102-green.svg)](LICENSE)
@@ -931,7 +931,7 @@ async def test_concurrent_flips():
 
 ## License
 
-This project is licensed under the MIT License, except where otherwise stated.
+This project is licensed under the [MIT License](LICENSE), except where otherwise stated.
 
 Copyright (c) 2021-25 MIT 6.102/6.031 course staff. All rights reserved.  
 Redistribution of original or derived work requires permission of course staff.
@@ -954,7 +954,3 @@ Redistribution of original or derived work requires permission of course staff.
 - [aiohttp Documentation](https://docs.aiohttp.org/)
 - [PEP 492 - Coroutines with async and await](https://www.python.org/dev/peps/pep-0492/)
 - [Lock-Free and Wait-Free Algorithms](https://preshing.com/20120612/an-introduction-to-lock-free-programming/)
-
----
-
-Built with Python asyncio for MIT 6.102/6.031

@@ -1,18 +1,21 @@
 # Copyright (c) 2021-25 MIT 6.102/6.031 course staff, all rights reserved.
 # Redistribution of original or derived work requires permission of course staff.
 
-import sys
 import asyncio
 from aiohttp import web
 from .board import Board
 from .commands import look, flip, map_board, watch
+from .config import load_config
 
 
 async def main():
     """
     Start a game server using the given arguments.
 
-    PS4 instructions: you are advised *not* to modify this file.
+    Configuration priority:
+    1. Command-line arguments: python server.py PORT FILENAME
+    2. Environment variables: PORT and BOARD_FILE
+    3. Defaults: PORT=8080, BOARD_FILE=boards/perfect.txt
 
     Command-line usage:
         python server.py PORT FILENAME
@@ -27,35 +30,30 @@ async def main():
     board in `boards/hearts.txt`:
         python server.py 0 boards/hearts.txt
 
+    Or use environment variables:
+        PORT=8080 BOARD_FILE=boards/ab.txt python -m app.server
+
+    Or use defaults:
+        python -m app.server
+
     @throws Error if an error occurs parsing a file or starting a server
     """
-    args = sys.argv[1:]  # skip the first argument (script name)
-
-    if len(args) < 1:
-        raise ValueError("missing PORT")
-    port_string = args[0]
-
-    try:
-        port = int(port_string)
-    except ValueError:
-        raise ValueError("invalid PORT")
+    port, filename, host = load_config()
 
     if port < 0:
         raise ValueError("invalid PORT")
 
-    if len(args) < 2:
-        raise ValueError("missing FILENAME")
-    filename = args[1]
-
     board = await Board.parse_from_file(filename)
-    server = WebServer(board, port)
+    server = WebServer(board, port, host)
     await server.start()
 
     # Keep the server running until interrupted
+    shutdown_event = asyncio.Event()
     try:
-        # Wait forever (until Ctrl+C)
-        await asyncio.Event().wait()
-    except KeyboardInterrupt:
+        await shutdown_event.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass  # Normal shutdown
+    finally:
         print("\nShutting down server...")
         await server.stop()
 
@@ -65,15 +63,17 @@ class WebServer:
     HTTP web game server.
     """
 
-    def __init__(self, board: Board, requested_port: int):
+    def __init__(self, board: Board, requested_port: int, host: str = "localhost"):
         """
         Make a new web game server using board that listens for connections on port.
 
         @param board shared game board
         @param requested_port server port number
+        @param host host address to bind to (default: localhost)
         """
         self.board = board
         self.requested_port = requested_port
+        self.host = host
         self.app = web.Application()
         self.runner = None
         self.site = None
@@ -205,9 +205,10 @@ class WebServer:
         """
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, "localhost", self.requested_port)
+        self.site = web.TCPSite(self.runner, self.host, self.requested_port)
         await self.site.start()
-        print(f"server now listening at http://localhost:{self.port}")
+        print(f"Server now listening at http://{self.host}:{self.port}")
+        print(f"Serving board: {self.board}")
 
     @property
     def port(self) -> int:
@@ -219,7 +220,7 @@ class WebServer:
         """
         if self.site is None:
             raise RuntimeError("server is not listening at a port")
-        return self.site._server.sockets[0].getsockname()[1]
+        return self.site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
 
     async def stop(self):
         """
@@ -227,7 +228,7 @@ class WebServer:
         """
         if self.runner:
             await self.runner.cleanup()
-        print("server stopped")
+        print("Server stopped")
 
 
 if __name__ == "__main__":

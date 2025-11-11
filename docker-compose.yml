@@ -1,0 +1,15 @@
+services:
+  memory-scramble:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    ports:
+      - "${PORT}:${PORT}"
+    environment:
+      - PORT=${PORT}
+      - BOARD_FILE=${BOARD_FILE:-boards/perfect.txt}
+      - HOST=${HOST}
+      - PYTHONUNBUFFERED=1
+    restart: on-failure:3
+    stop_grace_period: 2s
+    stop_signal: SIGTERM

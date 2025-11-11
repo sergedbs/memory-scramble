@@ -106,6 +106,9 @@
     with <input id="memory-to-card" class="form-control" type="text" value="&#127853;"></input>
     <button id="memory-replace" class="btn btn-info">replace</button>
   </div>
+  <div class="form-inline visible-when-playing">
+    <button id="memory-reset" class="btn btn-warning">Reset Board</button>
+  </div>
   <script>
     /* Copyright (c) 2017-2025 MIT 6.102/6.031 course staff, all rights reserved. */
 
@@ -171,6 +174,12 @@
       const replaceButton = document.getElementById('memory-replace');
       if (fromCardBox && toCardBox && replaceButton) {
         replaceButton.addEventListener('click', function() { replace(fromCardBox.value, toCardBox.value); });
+      }
+
+      // the reset button
+      const resetButton = document.getElementById('memory-reset');
+      if (resetButton) {
+        resetButton.addEventListener('click', function() { reset(); });
       }
 
       // flippingCell is the HTML element of the card that the player is in the process of flipping,
@@ -328,6 +337,23 @@ Try saving this web page to a file on your local machine, and opening that file 
         });
         req.open('GET', 'http://' + memoryGame.server + '/replace/' + playerID + '/' + fromCard + '/' + toCard);
         console.log('sending replace request');
+        req.send();
+      }
+
+      /**
+      * Issues a reset operation to the server to reset the board.
+      */
+      function reset() {
+        const req = new XMLHttpRequest();
+        req.addEventListener('load', function onResetLoad() {
+          console.log('reset response', this.responseText.replace(/\r?\n/g, '\u21B5'));
+          refreshBoard(this.responseText);
+        });
+        req.addEventListener('error', function onResetError() {
+          console.error('reset error', memoryGame.server);
+        });
+        req.open('GET', 'http://' + memoryGame.server + '/reset/' + playerID);
+        console.log('sending reset request');
         req.send();
       }
       

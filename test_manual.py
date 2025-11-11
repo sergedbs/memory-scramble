@@ -90,7 +90,7 @@ async def test_complete_game_flow():
     print("✓ Only B cards remain on board")
 
     print("\n" + "=" * 60)
-    print("✅ ALL MANUAL VERIFICATION TESTS PASSED")
+    print("✓ ALL MANUAL VERIFICATION TESTS PASSED")
     print("=" * 60)
 
 
@@ -129,7 +129,7 @@ async def test_concurrency():
     print("✓ Concurrent access handled correctly")
 
     print("\n" + "=" * 60)
-    print("✅ CONCURRENCY TEST PASSED")
+    print("✓ CONCURRENCY TEST PASSED")
     print("=" * 60)
 
 
@@ -183,7 +183,7 @@ async def test_map_operation():
     print("✓ Matching consistency preserved through map")
 
     print("\n" + "=" * 60)
-    print("✅ MAP OPERATION TEST PASSED")
+    print("✓ MAP OPERATION TEST PASSED")
     print("=" * 60)
 
 
@@ -222,7 +222,7 @@ async def test_watch_operation():
     print("✓ Watch operation notified on board change")
 
     print("\n" + "=" * 60)
-    print("✅ WATCH OPERATION TEST PASSED")
+    print("✓ WATCH OPERATION TEST PASSED")
     print("=" * 60)
 
 
@@ -235,7 +235,7 @@ async def main():
         await test_watch_operation()
 
         print("\n" + "=" * 60)
-        print("🎉 ALL MANUAL VERIFICATIONS PASSED")
+        print(" ALL MANUAL VERIFICATIONS PASSED")
         print("=" * 60)
         print("\nThe implementation correctly follows all game rules:")
         print("  ✓ First/second flip mechanics")
@@ -246,7 +246,7 @@ async def main():
         print("  ✓ Watch operation notifications")
 
     except Exception as e:
-        print(f"\n❌ VERIFICATION FAILED: {e}")
+        print(f"\n VERIFICATION FAILED: {e}")
         raise
 
 

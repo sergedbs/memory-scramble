@@ -21,15 +21,15 @@ async def simulation_main():
     if len(sys.argv) > 1:
         filename = sys.argv[1]
     else:
-        filename = "boards/perfect.txt"
+        filename = "boards/zoom.txt"
 
     board = await Board.parse_from_file(filename)
     rows, cols = board.size()
 
     # Simulation parameters
-    players = 3
-    tries_per_player = 15
-    max_delay_milliseconds = 20
+    players = 4
+    tries_per_player = 100
+    max_delay_milliseconds = 2
     flip_timeout_seconds = 2.0  # Timeout for flips to prevent deadlocks
 
     # Statistics tracking
@@ -43,7 +43,7 @@ async def simulation_main():
     stats_lock = asyncio.Lock()
 
     print(f"\n{'=' * 60}")
-    print("🎮 Memory Scramble Stress Test Simulation")
+    print(" Memory Scramble Stress Test Simulation")
     print(f"{'=' * 60}")
     print(f"Board: {filename} ({rows}x{cols}, {rows * cols} cards)")
     print(f"Players: {players} concurrent bots")
@@ -123,7 +123,7 @@ async def simulation_main():
 
     # Print final statistics
     print(f"\n{'=' * 60}")
-    print("✅ Simulation Complete!")
+    print("✓ Simulation Complete!")
     print(f"{'=' * 60}")
     print(f"Total flips attempted: {stats['total_flips']}")
     print(f"Successful matches: {stats['successful_matches']}")

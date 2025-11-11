@@ -83,3 +83,20 @@ async def watch(board: Board, player_id: str) -> str:
     """
     await board.watch()
     return board.look(player_id)
+
+
+async def reset(board: Board, player_id: str) -> str:
+    """
+    Reset the board to its initial state.
+
+    All cards are returned to the board (if removed), flipped face down,
+    and control is relinquished. All player states are cleared.
+
+    @param board a Memory Scramble board
+    @param player_id ID of player requesting the reset;
+                     must be a nonempty string of alphanumeric or underscore characters
+    @returns the state of the board after reset from the perspective of player_id,
+             in the format described in the ps4 handout
+    """
+    await board.reset()
+    return board.look(player_id)

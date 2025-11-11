@@ -774,6 +774,29 @@ class Board:
             # We'll use a dummy player ID that doesn't exist
             return self.look("_watcher_")
 
+    async def reset(self) -> None:
+        """
+        Reset the board to its initial state.
+
+        All cards are returned to the board (if removed), flipped face down,
+        and control is relinquished. All player states are cleared.
+        Notifies all watchers of the board change.
+        """
+        async with self._lock:
+            # Reset all cards to initial state
+            for row in self._grid:
+                for card in row:
+                    card.on_board = True
+                    card.face_up = False
+                    card.controller = None
+                    card.last_controller = None
+
+            # Clear all player states
+            self._players.clear()
+
+            # Notify watchers of the board change
+            self._notify_watchers()
+
     @staticmethod
     async def parse_from_file(filename: str) -> "Board":
         """

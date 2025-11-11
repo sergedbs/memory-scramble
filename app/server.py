@@ -4,7 +4,7 @@
 import asyncio
 from aiohttp import web
 from .board import Board
-from .commands import look, flip, map_board, watch
+from .commands import look, flip, map_board, watch, reset
 from .config import load_config
 
 
@@ -190,6 +190,25 @@ class WebServer:
 
         self.app.router.add_get("/watch/{playerId}", handle_watch)
 
+        # GET /reset/<playerId>
+        # playerId must be a nonempty string of alphanumeric or underscore characters
+        #
+        # Resets the board to its initial state. All cards are returned face-down,
+        # no cards are controlled, and all player states are cleared.
+        #
+        # Response is the board state after reset from playerId's perspective.
+        async def handle_reset(request):
+            player_id = request.match_info["playerId"]
+            assert player_id
+
+            try:
+                board_state = await reset(self.board, player_id)
+                return web.Response(text=board_state, status=200)
+            except ValueError as err:
+                return web.Response(text=f"invalid player ID: {err}", status=400)
+
+        self.app.router.add_get("/reset/{playerId}", handle_reset)
+
         # GET /
         #
         # Response is the game UI as an HTML page.
@@ -206,7 +225,6 @@ class WebServer:
         self.site = web.TCPSite(self.runner, self.host, self.requested_port)
         await self.site.start()
         print(f"Server now listening at http://{self.host}:{self.port}")
-        print(f"Serving board: {self.board}")
 
     @property
     def port(self) -> int:

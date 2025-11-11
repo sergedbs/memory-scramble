@@ -2,7 +2,6 @@ services:
   memory-scramble:
     build:
       context: .
-      dockerfile: app/Dockerfile
     ports:
       - "${PORT}:${PORT}"
     environment:
